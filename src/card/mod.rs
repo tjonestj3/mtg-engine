@@ -74,6 +74,8 @@ pub struct CardData {
     pub toughness: Option<i32>,
     pub oracle_text: String,
     pub basic_land_types: Vec<BasicLandType>,
+    #[serde(default)]
+    pub image_file: Option<String>,
 }
 
 impl CardData {

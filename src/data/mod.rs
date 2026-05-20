@@ -16,6 +16,7 @@ pub fn basic_land(name: &str, land_type: BasicLandType) -> CardData {
         toughness: None,
         oracle_text: format!("({{T}}: Add {{{}}})", land_type.produces()),
         basic_land_types: vec![land_type],
+        image_file: None,
     }
 }
 
@@ -31,6 +32,7 @@ pub fn vanilla_creature(name: &str, cost: ManaCost, power: i32, toughness: i32) 
         toughness: Some(toughness),
         oracle_text: String::new(),
         basic_land_types: vec![],
+        image_file: None,
     }
 }
 
@@ -52,6 +54,7 @@ pub fn creature_with_keywords(
         toughness: Some(toughness),
         oracle_text: String::new(),
         basic_land_types: vec![],
+        image_file: None,
     }
 }
 

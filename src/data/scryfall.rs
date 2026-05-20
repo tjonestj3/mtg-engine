@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::fs;
+use std::io::Read as _;
 use std::path::PathBuf;
 use std::thread;
 use std::time::Duration;
@@ -9,10 +10,53 @@ use serde_json::Value;
 use crate::card::{BasicLandType, CardData, CardType, Keyword, Supertype};
 use crate::mana::ManaCost;
 
-fn cache_path() -> PathBuf {
+fn cache_dir() -> PathBuf {
     let dir = dirs_or_home().join(".mtg-engine");
     fs::create_dir_all(&dir).ok();
-    dir.join("card_cache.json")
+    dir
+}
+
+fn cache_path() -> PathBuf {
+    cache_dir().join("card_cache.json")
+}
+
+fn images_dir() -> PathBuf {
+    let dir = cache_dir().join("images");
+    fs::create_dir_all(&dir).ok();
+    dir
+}
+
+fn image_filename(card_name: &str) -> String {
+    card_name
+        .to_lowercase()
+        .replace(|c: char| !c.is_alphanumeric(), "_")
+        + ".jpg"
+}
+
+pub fn image_path_for(card_name: &str) -> Option<PathBuf> {
+    let path = images_dir().join(image_filename(card_name));
+    if path.exists() { Some(path) } else { None }
+}
+
+fn download_image(url: &str, card_name: &str) -> Option<PathBuf> {
+    let path = images_dir().join(image_filename(card_name));
+    if path.exists() {
+        return Some(path);
+    }
+    match ureq::get(url).call() {
+        Ok(resp) => {
+            let mut bytes = Vec::new();
+            if resp.into_reader().read_to_end(&mut bytes).is_ok() && !bytes.is_empty() {
+                if fs::write(&path, &bytes).is_ok() {
+                    return Some(path);
+                }
+            }
+        }
+        Err(e) => {
+            eprintln!("  Image download failed for {}: {}", card_name, e);
+        }
+    }
+    None
 }
 
 fn dirs_or_home() -> PathBuf {
@@ -45,20 +89,44 @@ pub fn fetch_card(name: &str) -> Result<CardData, String> {
         cached.clone()
     } else {
         println!("  Fetching from Scryfall: {}", name);
-        thread::sleep(Duration::from_millis(80));
 
         let url = format!(
             "https://api.scryfall.com/cards/named?exact={}",
             urlencoded(name)
         );
 
-        let resp = ureq::get(&url)
-            .call()
-            .map_err(|e| format!("HTTP error for '{}': {}", name, e))?;
+        let mut last_err = String::new();
+        let mut json_result: Option<Value> = None;
 
-        let json: Value = resp
-            .into_json()
-            .map_err(|e| format!("JSON parse error for '{}': {}", name, e))?;
+        for attempt in 0..3 {
+            if attempt > 0 {
+                println!("  Retry {}/2 for: {}", attempt, name);
+            }
+            thread::sleep(Duration::from_millis(150));
+
+            match ureq::get(&url).call() {
+                Ok(resp) => {
+                    match resp.into_json::<Value>() {
+                        Ok(j) => { json_result = Some(j); break; }
+                        Err(e) => { last_err = format!("JSON parse error: {}", e); }
+                    }
+                }
+                Err(ureq::Error::Status(429, _)) => {
+                    println!("  Rate limited, waiting 2s...");
+                    thread::sleep(Duration::from_secs(2));
+                    last_err = "rate limited".to_string();
+                }
+                Err(ureq::Error::Status(code, resp)) => {
+                    let body = resp.into_string().unwrap_or_default();
+                    last_err = format!("HTTP {} — {}", code, body);
+                }
+                Err(e) => {
+                    last_err = format!("{}", e);
+                }
+            }
+        }
+
+        let json = json_result.ok_or_else(|| format!("Failed to fetch '{}': {}", name, last_err))?;
 
         if json.get("object").and_then(|v| v.as_str()) == Some("error") {
             return Err(format!(
@@ -87,21 +155,134 @@ pub fn fetch_decklist(entries: &[(u8, &str)], status_fn: Option<&dyn Fn(&str)>) 
         seen
     };
 
+    let mut cache = load_cache();
     let mut card_map: HashMap<String, CardData> = HashMap::new();
-    let total = unique_names.len();
 
-    for (i, &name) in unique_names.iter().enumerate() {
-        if let Some(f) = status_fn {
-            f(&format!("Loading {}/{}: {}", i + 1, total, name));
-        }
-        match fetch_card(name) {
-            Ok(card) => {
-                card_map.insert(name.to_lowercase(), card);
+    let mut uncached: Vec<&str> = Vec::new();
+    for &name in &unique_names {
+        let key = name.to_lowercase();
+        if let Some(json) = cache.get(&key) {
+            if let Ok(card) = parse_scryfall_card(json) {
+                card_map.insert(key, card);
             }
-            Err(e) => {
-                eprintln!("Warning: {}", e);
+        } else {
+            uncached.push(name);
+        }
+    }
+
+    if let Some(f) = &status_fn {
+        f(&format!("{} cached, fetching {} from Scryfall...", card_map.len(), uncached.len()));
+    }
+
+    for chunk in uncached.chunks(75) {
+        let identifiers: Vec<Value> = chunk.iter().map(|name| {
+            serde_json::json!({"name": name})
+        }).collect();
+        let body = serde_json::json!({"identifiers": identifiers});
+
+        let mut last_err = String::new();
+        let mut result: Option<Value> = None;
+
+        for attempt in 0..3 {
+            if attempt > 0 {
+                println!("  Retry {}/2 for batch...", attempt);
+            }
+            thread::sleep(Duration::from_millis(150));
+
+            match ureq::post("https://api.scryfall.com/cards/collection")
+                .set("Content-Type", "application/json")
+                .send_json(body.clone())
+            {
+                Ok(resp) => {
+                    match resp.into_json::<Value>() {
+                        Ok(j) => { result = Some(j); break; }
+                        Err(e) => { last_err = format!("JSON parse: {}", e); }
+                    }
+                }
+                Err(ureq::Error::Status(429, _)) => {
+                    println!("  Rate limited, waiting 2s...");
+                    thread::sleep(Duration::from_secs(2));
+                    last_err = "rate limited".to_string();
+                }
+                Err(ureq::Error::Status(code, resp)) => {
+                    let body_str = resp.into_string().unwrap_or_default();
+                    last_err = format!("HTTP {} — {}", code, body_str);
+                }
+                Err(e) => {
+                    last_err = format!("{}", e);
+                }
             }
         }
+
+        match result {
+            Some(json) => {
+                if let Some(data) = json.get("data").and_then(|v| v.as_array()) {
+                    for card_json in data {
+                        if let Ok(mut card) = parse_scryfall_card(card_json) {
+                            let key = card.name.to_lowercase();
+                            let img_url = card_json
+                                .get("image_uris")
+                                .and_then(|u| u.get("normal"))
+                                .and_then(|v| v.as_str())
+                                .map(|s| s.to_string());
+                            if let Some(url) = &img_url {
+                                if let Some(f) = &status_fn {
+                                    f(&format!("Downloading image: {}", card.name));
+                                }
+                                thread::sleep(Duration::from_millis(60));
+                                if let Some(path) = download_image(url, &card.name) {
+                                    card.image_file = Some(path.to_string_lossy().to_string());
+                                }
+                            }
+                            cache.insert(key.clone(), card_json.clone());
+                            card_map.insert(key, card);
+                        }
+                    }
+                }
+                if let Some(not_found) = json.get("not_found").and_then(|v| v.as_array()) {
+                    for nf in not_found {
+                        if let Some(name) = nf.get("name").and_then(|v| v.as_str()) {
+                            eprintln!("  Card not found: {}", name);
+                        }
+                    }
+                }
+            }
+            None => {
+                eprintln!("Warning: batch fetch failed: {}", last_err);
+            }
+        }
+    }
+
+    // Also download images for cards that were in the cache but missing images
+    for &name in &unique_names {
+        let key = name.to_lowercase();
+        if let Some(card) = card_map.get(&key) {
+            if card.image_file.is_none() {
+                if let Some(json) = cache.get(&key) {
+                    let img_url = json
+                        .get("image_uris")
+                        .and_then(|u| u.get("normal"))
+                        .and_then(|v| v.as_str());
+                    if let Some(url) = img_url {
+                        if let Some(f) = &status_fn {
+                            f(&format!("Downloading image: {}", name));
+                        }
+                        thread::sleep(Duration::from_millis(60));
+                        if let Some(path) = download_image(url, name) {
+                            if let Some(card) = card_map.get_mut(&key) {
+                                card.image_file = Some(path.to_string_lossy().to_string());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    save_cache(&cache);
+
+    if let Some(f) = &status_fn {
+        f(&format!("Loaded {} unique cards", card_map.len()));
     }
 
     let mut deck = Vec::new();
@@ -168,6 +349,7 @@ fn parse_scryfall_card(json: &Value) -> Result<CardData, String> {
         toughness,
         oracle_text,
         basic_land_types,
+        image_file: None,
     })
 }
 

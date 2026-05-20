@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use macroquad::prelude::*;
 
 use crate::card::{CardData, CardId, CardType, Keyword};
@@ -73,6 +75,7 @@ struct UiState {
     zoom_card: Option<CardData>,
     last_click_time: f64,
     last_click_card: Option<CardId>,
+    textures: HashMap<String, Texture2D>,
 }
 
 impl UiState {
@@ -87,7 +90,12 @@ impl UiState {
             zoom_card: None,
             last_click_time: 0.0,
             last_click_card: None,
+            textures: HashMap::new(),
         }
+    }
+
+    fn get_texture(&self, card: &CardData) -> Option<&Texture2D> {
+        self.textures.get(&card.name)
     }
 
     fn check_double_click(&mut self, card_id: CardId, card: &CardData) {
@@ -155,6 +163,7 @@ fn draw_card_at(
     highlighted: bool,
     glow: Option<Color>,
     sick: bool,
+    texture: Option<&Texture2D>,
 ) -> (f32, f32, f32, f32) {
     let (w, h) = if tapped { (TAPPED_W, TAPPED_H) } else { (CARD_W, CARD_H) };
 
@@ -166,98 +175,118 @@ fn draw_card_at(
         draw_rectangle(x - 2.0, y - 2.0, w + 4.0, h + 4.0, HIGHLIGHT_COLOR);
     }
 
-    let bg = card_bg(card);
-    let tc = card_text_color(card);
     let alpha = if sick { 0.7 } else { 1.0 };
-    let bg = Color::new(bg.r, bg.g, bg.b, alpha);
 
-    draw_rectangle(x, y, w, h, bg);
-    draw_rectangle_lines(x, y, w, h, 1.5, Color::new(0.0, 0.0, 0.0, 0.6));
+    if let Some(tex) = texture {
+        let tint = Color::new(1.0, 1.0, 1.0, alpha);
+        draw_texture_ex(tex, x, y, tint, DrawTextureParams {
+            dest_size: Some(vec2(w, h)),
+            ..Default::default()
+        });
+        draw_rectangle_lines(x, y, w, h, 1.0, Color::new(0.0, 0.0, 0.0, 0.4));
 
-    // Card name
-    let name = if card.name.len() > 11 {
-        &card.name[..11]
+        // P/T overlay for creatures on battlefield
+        if let (Some(p), Some(t)) = (card.power, card.toughness) {
+            if perm.is_some() {
+                let (pm, tm) = if let Some(perm) = perm {
+                    (
+                        perm.power_modifier + perm.counters.plus_one - perm.counters.minus_one,
+                        perm.toughness_modifier + perm.counters.plus_one - perm.counters.minus_one,
+                    )
+                } else {
+                    (0, 0)
+                };
+                let dmg = perm.map(|p| p.damage_marked).unwrap_or(0);
+                let pt_str = if dmg > 0 {
+                    format!("{}/{} ({})", p + pm, t + tm, dmg)
+                } else {
+                    format!("{}/{}", p + pm, t + tm)
+                };
+                let pt_w = pt_str.len() as f32 * 8.0 + 6.0;
+                draw_rectangle(x + w - pt_w - 2.0, y + h - 18.0, pt_w, 16.0, Color::new(0.0, 0.0, 0.0, 0.7));
+                draw_text(&pt_str, x + w - pt_w, y + h - 5.0, FONT_SM, WHITE);
+            }
+        }
+
+        if tapped {
+            draw_text("TAP", x + 2.0, y + 14.0, FONT_SM, Color::new(1.0, 0.5, 0.0, 0.9));
+        }
+        if sick {
+            draw_text("zzz", x + w - 28.0, y + 14.0, FONT_SM, Color::new(1.0, 1.0, 0.3, 0.8));
+        }
     } else {
-        &card.name
-    };
-    draw_text(name, x + 3.0, y + 14.0, FONT_SM, tc);
+        let bg = card_bg(card);
+        let tc = card_text_color(card);
+        let bg = Color::new(bg.r, bg.g, bg.b, alpha);
 
-    // Mana cost
-    if card.cost.converted_mana_cost() > 0 {
-        let cost_str = format!("{}", card.cost.converted_mana_cost());
-        draw_text(&cost_str, x + w - 16.0, y + 14.0, FONT_SM, tc);
-    }
+        draw_rectangle(x, y, w, h, bg);
+        draw_rectangle_lines(x, y, w, h, 1.5, Color::new(0.0, 0.0, 0.0, 0.6));
 
-    // Type line
-    let type_str = if card.is_creature() {
-        "Creature"
-    } else if card.is_land() {
-        "Land"
-    } else if card.is_type(CardType::Instant) {
-        "Instant"
-    } else if card.is_type(CardType::Sorcery) {
-        "Sorcery"
-    } else if card.is_type(CardType::Enchantment) {
-        "Enchant"
-    } else if card.is_type(CardType::Artifact) {
-        "Artifact"
-    } else {
-        ""
-    };
+        let name = if card.name.len() > 11 { &card.name[..11] } else { &card.name };
+        draw_text(name, x + 3.0, y + 14.0, FONT_SM, tc);
 
-    if !tapped {
-        draw_text(type_str, x + 3.0, y + 55.0, FONT_SM - 2.0, Color::new(tc.r, tc.g, tc.b, 0.7));
-    }
+        if card.cost.converted_mana_cost() > 0 {
+            let cost_str = format!("{}", card.cost.converted_mana_cost());
+            draw_text(&cost_str, x + w - 16.0, y + 14.0, FONT_SM, tc);
+        }
 
-    // Keywords
-    if !card.keywords.is_empty() {
-        let kws: Vec<&str> = card.keywords.iter().take(3).map(|k| match k {
-            Keyword::Flying => "Fly",
-            Keyword::FirstStrike => "FS",
-            Keyword::DoubleStrike => "DS",
-            Keyword::Deathtouch => "DT",
-            Keyword::Lifelink => "LL",
-            Keyword::Trample => "Trmp",
-            Keyword::Vigilance => "Vig",
-            Keyword::Reach => "Rch",
-            Keyword::Haste => "Hst",
-            Keyword::Hexproof => "Hex",
-            Keyword::Indestructible => "Ind",
-            Keyword::Menace => "Men",
-            Keyword::Flash => "Fls",
-            Keyword::Defender => "Def",
-        }).collect();
-        let kw_y = if tapped { y + h - 20.0 } else { y + 70.0 };
-        draw_text(&kws.join(" "), x + 3.0, kw_y, FONT_SM - 3.0, Color::new(tc.r, tc.g, tc.b, 0.6));
-    }
+        let type_str = if card.is_creature() { "Creature" }
+            else if card.is_land() { "Land" }
+            else if card.is_type(CardType::Instant) { "Instant" }
+            else if card.is_type(CardType::Sorcery) { "Sorcery" }
+            else if card.is_type(CardType::Enchantment) { "Enchant" }
+            else if card.is_type(CardType::Artifact) { "Artifact" }
+            else { "" };
 
-    // P/T
-    if let (Some(p), Some(t)) = (card.power, card.toughness) {
-        let (pm, tm) = if let Some(perm) = perm {
-            (
-                perm.power_modifier + perm.counters.plus_one - perm.counters.minus_one,
-                perm.toughness_modifier + perm.counters.plus_one - perm.counters.minus_one,
-            )
-        } else {
-            (0, 0)
-        };
-        let dmg = perm.map(|p| p.damage_marked).unwrap_or(0);
-        let pt_str = if dmg > 0 {
-            format!("{}/{} ({})", p + pm, t + tm, dmg)
-        } else {
-            format!("{}/{}", p + pm, t + tm)
-        };
-        draw_text(&pt_str, x + 3.0, y + h - 5.0, FONT_MD, tc);
-    }
+        if !tapped {
+            draw_text(type_str, x + 3.0, y + 55.0, FONT_SM - 2.0, Color::new(tc.r, tc.g, tc.b, 0.7));
+        }
 
-    // Tapped indicator
-    if tapped {
-        draw_text("TAP", x + w - 30.0, y + h - 5.0, FONT_SM, Color::new(1.0, 0.5, 0.0, 0.8));
-    }
+        if !card.keywords.is_empty() {
+            let kws: Vec<&str> = card.keywords.iter().take(3).map(|k| match k {
+                Keyword::Flying => "Fly",
+                Keyword::FirstStrike => "FS",
+                Keyword::DoubleStrike => "DS",
+                Keyword::Deathtouch => "DT",
+                Keyword::Lifelink => "LL",
+                Keyword::Trample => "Trmp",
+                Keyword::Vigilance => "Vig",
+                Keyword::Reach => "Rch",
+                Keyword::Haste => "Hst",
+                Keyword::Hexproof => "Hex",
+                Keyword::Indestructible => "Ind",
+                Keyword::Menace => "Men",
+                Keyword::Flash => "Fls",
+                Keyword::Defender => "Def",
+            }).collect();
+            let kw_y = if tapped { y + h - 20.0 } else { y + 70.0 };
+            draw_text(&kws.join(" "), x + 3.0, kw_y, FONT_SM - 3.0, Color::new(tc.r, tc.g, tc.b, 0.6));
+        }
 
-    // Summoning sickness indicator
-    if sick {
-        draw_text("zzz", x + w - 28.0, y + 28.0, FONT_SM, Color::new(1.0, 1.0, 0.3, 0.6));
+        if let (Some(p), Some(t)) = (card.power, card.toughness) {
+            let (pm, tm) = if let Some(perm) = perm {
+                (
+                    perm.power_modifier + perm.counters.plus_one - perm.counters.minus_one,
+                    perm.toughness_modifier + perm.counters.plus_one - perm.counters.minus_one,
+                )
+            } else {
+                (0, 0)
+            };
+            let dmg = perm.map(|p| p.damage_marked).unwrap_or(0);
+            let pt_str = if dmg > 0 {
+                format!("{}/{} ({})", p + pm, t + tm, dmg)
+            } else {
+                format!("{}/{}", p + pm, t + tm)
+            };
+            draw_text(&pt_str, x + 3.0, y + h - 5.0, FONT_MD, tc);
+        }
+
+        if tapped {
+            draw_text("TAP", x + w - 30.0, y + h - 5.0, FONT_SM, Color::new(1.0, 0.5, 0.0, 0.8));
+        }
+        if sick {
+            draw_text("zzz", x + w - 28.0, y + 28.0, FONT_SM, Color::new(1.0, 1.0, 0.3, 0.6));
+        }
     }
 
     (x, y, w, h)
@@ -472,6 +501,20 @@ pub async fn run_game_ui(game: &mut GameState) {
     }
 
     let mut ui = UiState::new();
+
+    // Load card image textures
+    for card in game.card_registry.values() {
+        if let Some(ref path) = card.image_file {
+            if !ui.textures.contains_key(&card.name) {
+                if let Ok(bytes) = std::fs::read(path) {
+                    let tex = Texture2D::from_file_with_format(&bytes, None);
+                    tex.set_filter(FilterMode::Linear);
+                    ui.textures.insert(card.name.clone(), tex);
+                }
+            }
+        }
+    }
+
     ui.auto_timer = 0.8;
     ui.set_message("Game started! Opening hands drawn.");
     let mut combat_log: Vec<String> = Vec::new();
@@ -584,7 +627,8 @@ pub async fn run_game_ui(game: &mut GameState) {
 
                     if let Some(card) = card {
                         let glow = if hovered && ui.phase == UiPhase::Main { Some(HIGHLIGHT_COLOR) } else { None };
-                        draw_card_at(&card, None, cx, cy, false, false, glow, false);
+                        let tex = ui.get_texture(&card);
+                        draw_card_at(&card, None, cx, cy, false, false, glow, false, tex);
 
                         if hovered && is_mouse_button_pressed(MouseButton::Left) {
                             ui.check_double_click(cid, &card);
@@ -645,8 +689,8 @@ pub async fn run_game_ui(game: &mut GameState) {
                     };
 
                     let hovered = point_in_rect(mouse.0, mouse.1, cx, cy, cw, ch);
-
-                    draw_card_at(&card, Some(&perm), cx, cy, tapped, false, glow, sick);
+                    let tex = ui.get_texture(&card);
+                    draw_card_at(&card, Some(&perm), cx, cy, tapped, false, glow, sick, tex);
 
                     if hovered && is_mouse_button_pressed(MouseButton::Left) {
                         ui.check_double_click(cid, &card);
@@ -723,8 +767,8 @@ pub async fn run_game_ui(game: &mut GameState) {
                     };
 
                     let hovered = point_in_rect(mouse.0, mouse.1, cx, cy, cw, ch);
-
-                    draw_card_at(&card, Some(&perm), cx, cy, tapped, false, glow, sick);
+                    let tex = ui.get_texture(&card);
+                    draw_card_at(&card, Some(&perm), cx, cy, tapped, false, glow, sick, tex);
 
                     if hovered && is_mouse_button_pressed(MouseButton::Left) {
                         ui.check_double_click(cid, &card);
@@ -780,7 +824,8 @@ pub async fn run_game_ui(game: &mut GameState) {
 
                     if let Some(card) = card {
                         let glow = if hovered && ui.phase == UiPhase::Main { Some(HIGHLIGHT_COLOR) } else { None };
-                        draw_card_at(&card, None, cx, cy, false, false, glow, false);
+                        let tex = ui.get_texture(&card);
+                        draw_card_at(&card, None, cx, cy, false, false, glow, false, tex);
 
                         if hovered && is_mouse_button_pressed(MouseButton::Left) && ui.phase == UiPhase::Main {
                             if card.is_land() && game.player(0).can_play_land() {
@@ -944,7 +989,8 @@ pub async fn run_game_ui(game: &mut GameState) {
         // -- Card zoom overlay --
         if let Some(ref card) = ui.zoom_card {
             draw_rectangle(0.0, 0.0, WINDOW_W, 800.0, Color::new(0.0, 0.0, 0.0, 0.75));
-            draw_zoom_card(card);
+            let zoom_tex = ui.textures.get(&card.name);
+            draw_zoom_card(card, zoom_tex);
             draw_text("Click anywhere to close", 530.0, 760.0, FONT_MD, DIM_TEXT);
 
             if is_mouse_button_pressed(MouseButton::Left) || is_mouse_button_pressed(MouseButton::Right) || is_key_pressed(KeyCode::Escape) {
@@ -956,11 +1002,21 @@ pub async fn run_game_ui(game: &mut GameState) {
     }
 }
 
-fn draw_zoom_card(card: &CardData) {
+fn draw_zoom_card(card: &CardData, texture: Option<&Texture2D>) {
     let zw = 320.0;
     let zh = 450.0;
     let zx = (WINDOW_W - zw) / 2.0;
     let zy = (750.0 - zh) / 2.0;
+
+    if let Some(tex) = texture {
+        draw_rectangle(zx - 4.0, zy - 4.0, zw + 8.0, zh + 8.0, Color::new(0.15, 0.15, 0.15, 1.0));
+        draw_texture_ex(tex, zx, zy, WHITE, DrawTextureParams {
+            dest_size: Some(vec2(zw, zh)),
+            ..Default::default()
+        });
+        draw_rectangle_lines(zx, zy, zw, zh, 2.0, Color::new(0.6, 0.6, 0.6, 1.0));
+        return;
+    }
 
     let bg = card_bg(card);
     let tc = card_text_color(card);
