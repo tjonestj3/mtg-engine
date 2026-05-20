@@ -7,4 +7,5 @@ pub mod game;
 pub mod mana;
 pub mod player;
 pub mod stack;
+pub mod ui;
 pub mod zone;

@@ -1,8 +1,22 @@
-use mtg_engine::data;
-use mtg_engine::game::game_loop;
-use mtg_engine::game::state::GameState;
+use macroquad::prelude::*;
 
-fn main() {
+use mtg_engine::data;
+use mtg_engine::game::state::GameState;
+use mtg_engine::ui;
+
+fn window_conf() -> Conf {
+    Conf {
+        window_title: "MTG Engine".to_owned(),
+        window_width: 1280,
+        window_height: 800,
+        window_resizable: false,
+        high_dpi: false,
+        ..Default::default()
+    }
+}
+
+#[macroquad::main(window_conf)]
+async fn main() {
     let mut game = GameState::new(vec!["Player 1".into(), "Player 2".into()]);
 
     for player_id in 0..2u8 {
@@ -14,5 +28,5 @@ fn main() {
         game.player_mut(player_id).zones.shuffle_library();
     }
 
-    game_loop::run_game(&mut game);
+    ui::run_game_ui(&mut game).await;
 }
