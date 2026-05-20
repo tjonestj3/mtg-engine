@@ -70,7 +70,9 @@ struct UiState {
     message: String,
     message_timer: f64,
     auto_timer: f64,
-    hovered_card: Option<CardId>,
+    zoom_card: Option<CardData>,
+    last_click_time: f64,
+    last_click_card: Option<CardId>,
 }
 
 impl UiState {
@@ -82,8 +84,23 @@ impl UiState {
             message: String::new(),
             message_timer: 0.0,
             auto_timer: 0.0,
-            hovered_card: None,
+            zoom_card: None,
+            last_click_time: 0.0,
+            last_click_card: None,
         }
+    }
+
+    fn check_double_click(&mut self, card_id: CardId, card: &CardData) {
+        let now = get_time();
+        if let Some(last_id) = self.last_click_card {
+            if last_id == card_id && (now - self.last_click_time) < 0.35 {
+                self.zoom_card = Some(card.clone());
+                self.last_click_card = None;
+                return;
+            }
+        }
+        self.last_click_time = now;
+        self.last_click_card = Some(card_id);
     }
 
     fn set_message(&mut self, msg: &str) {
@@ -569,7 +586,10 @@ pub async fn run_game_ui(game: &mut GameState) {
                         let glow = if hovered && ui.phase == UiPhase::Main { Some(HIGHLIGHT_COLOR) } else { None };
                         draw_card_at(&card, None, cx, cy, false, false, glow, false);
 
-                        if hovered && is_mouse_button_pressed(MouseButton::Left) && ui.phase == UiPhase::Main {
+                        if hovered && is_mouse_button_pressed(MouseButton::Left) {
+                            ui.check_double_click(cid, &card);
+                        }
+                        if hovered && is_mouse_button_pressed(MouseButton::Left) && ui.phase == UiPhase::Main && ui.zoom_card.is_none() {
                             if card.is_land() && game.player(1).can_play_land() {
                                 game.player_mut(1).zones.move_card(cid, Zone::Hand, Zone::Battlefield);
                                 let mut perm = PermanentState::new(cid);
@@ -629,18 +649,21 @@ pub async fn run_game_ui(game: &mut GameState) {
                     draw_card_at(&card, Some(&perm), cx, cy, tapped, false, glow, sick);
 
                     if hovered && is_mouse_button_pressed(MouseButton::Left) {
-                        if active == 1 && ui.phase == UiPhase::Main && card.is_land() && !perm.tapped && !card.basic_land_types.is_empty() {
-                            let types = card.basic_land_types.clone();
-                            if let Some(p) = game.get_permanent_mut(cid) { p.tap(); }
-                            for lt in &types { game.player_mut(1).mana_pool.add(lt.produces(), 1); }
-                            ui.set_message(&format!("Tapped {} for mana", card.name));
-                        }
-                        if let UiPhase::SelectBlockers { attacker_to_block } = &ui.phase {
-                            if active == 0 && card.is_creature() && !perm.tapped {
-                                if let Some(atk_id) = attacker_to_block {
-                                    ui.blocker_assignments.push((cid, *atk_id));
-                                    ui.set_message(&format!("{} blocks", card.name));
-                                    ui.phase = UiPhase::SelectBlockers { attacker_to_block: None };
+                        ui.check_double_click(cid, &card);
+                        if ui.zoom_card.is_none() {
+                            if active == 1 && ui.phase == UiPhase::Main && card.is_land() && !perm.tapped && !card.basic_land_types.is_empty() {
+                                let types = card.basic_land_types.clone();
+                                if let Some(p) = game.get_permanent_mut(cid) { p.tap(); }
+                                for lt in &types { game.player_mut(1).mana_pool.add(lt.produces(), 1); }
+                                ui.set_message(&format!("Tapped {} for mana", card.name));
+                            }
+                            if let UiPhase::SelectBlockers { attacker_to_block } = &ui.phase {
+                                if active == 0 && card.is_creature() && !perm.tapped {
+                                    if let Some(atk_id) = attacker_to_block {
+                                        ui.blocker_assignments.push((cid, *atk_id));
+                                        ui.set_message(&format!("{} blocks", card.name));
+                                        ui.phase = UiPhase::SelectBlockers { attacker_to_block: None };
+                                    }
                                 }
                             }
                         }
@@ -704,25 +727,28 @@ pub async fn run_game_ui(game: &mut GameState) {
                     draw_card_at(&card, Some(&perm), cx, cy, tapped, false, glow, sick);
 
                     if hovered && is_mouse_button_pressed(MouseButton::Left) {
-                        if active == 0 && ui.phase == UiPhase::Main && card.is_land() && !perm.tapped && !card.basic_land_types.is_empty() {
-                            let types = card.basic_land_types.clone();
-                            if let Some(p) = game.get_permanent_mut(cid) { p.tap(); }
-                            for lt in &types { game.player_mut(0).mana_pool.add(lt.produces(), 1); }
-                            ui.set_message(&format!("Tapped {} for mana", card.name));
-                        }
-                        if ui.phase == UiPhase::SelectAttackers && active == 0 && card.is_creature() && perm.can_attack() && !card.has_keyword(Keyword::Defender) {
-                            if ui.selected_attackers.contains(&cid) {
-                                ui.selected_attackers.retain(|&id| id != cid);
-                            } else {
-                                ui.selected_attackers.push(cid);
+                        ui.check_double_click(cid, &card);
+                        if ui.zoom_card.is_none() {
+                            if active == 0 && ui.phase == UiPhase::Main && card.is_land() && !perm.tapped && !card.basic_land_types.is_empty() {
+                                let types = card.basic_land_types.clone();
+                                if let Some(p) = game.get_permanent_mut(cid) { p.tap(); }
+                                for lt in &types { game.player_mut(0).mana_pool.add(lt.produces(), 1); }
+                                ui.set_message(&format!("Tapped {} for mana", card.name));
                             }
-                        }
-                        if let UiPhase::SelectBlockers { attacker_to_block } = &ui.phase {
-                            if active == 1 && card.is_creature() && !perm.tapped {
-                                if let Some(atk_id) = attacker_to_block {
-                                    ui.blocker_assignments.push((cid, *atk_id));
-                                    ui.set_message(&format!("{} blocks", card.name));
-                                    ui.phase = UiPhase::SelectBlockers { attacker_to_block: None };
+                            if ui.phase == UiPhase::SelectAttackers && active == 0 && card.is_creature() && perm.can_attack() && !card.has_keyword(Keyword::Defender) {
+                                if ui.selected_attackers.contains(&cid) {
+                                    ui.selected_attackers.retain(|&id| id != cid);
+                                } else {
+                                    ui.selected_attackers.push(cid);
+                                }
+                            }
+                            if let UiPhase::SelectBlockers { attacker_to_block } = &ui.phase {
+                                if active == 1 && card.is_creature() && !perm.tapped {
+                                    if let Some(atk_id) = attacker_to_block {
+                                        ui.blocker_assignments.push((cid, *atk_id));
+                                        ui.set_message(&format!("{} blocks", card.name));
+                                        ui.phase = UiPhase::SelectBlockers { attacker_to_block: None };
+                                    }
                                 }
                             }
                         }
@@ -915,6 +941,127 @@ pub async fn run_game_ui(game: &mut GameState) {
             }
         }
 
+        // -- Card zoom overlay --
+        if let Some(ref card) = ui.zoom_card {
+            draw_rectangle(0.0, 0.0, WINDOW_W, 800.0, Color::new(0.0, 0.0, 0.0, 0.75));
+            draw_zoom_card(card);
+            draw_text("Click anywhere to close", 530.0, 760.0, FONT_MD, DIM_TEXT);
+
+            if is_mouse_button_pressed(MouseButton::Left) || is_mouse_button_pressed(MouseButton::Right) || is_key_pressed(KeyCode::Escape) {
+                ui.zoom_card = None;
+            }
+        }
+
         next_frame().await;
+    }
+}
+
+fn draw_zoom_card(card: &CardData) {
+    let zw = 320.0;
+    let zh = 450.0;
+    let zx = (WINDOW_W - zw) / 2.0;
+    let zy = (750.0 - zh) / 2.0;
+
+    let bg = card_bg(card);
+    let tc = card_text_color(card);
+
+    // Card frame
+    draw_rectangle(zx - 4.0, zy - 4.0, zw + 8.0, zh + 8.0, Color::new(0.15, 0.15, 0.15, 1.0));
+    draw_rectangle(zx, zy, zw, zh, bg);
+    draw_rectangle_lines(zx, zy, zw, zh, 2.0, Color::new(0.6, 0.6, 0.6, 1.0));
+
+    // Name bar
+    draw_rectangle(zx + 10.0, zy + 10.0, zw - 20.0, 36.0, Color::new(0.0, 0.0, 0.0, 0.2));
+    draw_text(&card.name, zx + 16.0, zy + 36.0, FONT_LG + 4.0, tc);
+
+    // Mana cost
+    if card.cost.converted_mana_cost() > 0 {
+        let cost_str = format!("{}", card.cost);
+        draw_text(&cost_str, zx + zw - 10.0 - cost_str.len() as f32 * 10.0, zy + 36.0, FONT_LG, tc);
+    }
+
+    // Type line
+    let type_parts: Vec<&str> = card.types.iter().map(|t| match t {
+        CardType::Creature => "Creature",
+        CardType::Instant => "Instant",
+        CardType::Sorcery => "Sorcery",
+        CardType::Enchantment => "Enchantment",
+        CardType::Artifact => "Artifact",
+        CardType::Land => "Land",
+        CardType::Planeswalker => "Planeswalker",
+    }).collect();
+
+    let mut type_line = String::new();
+    if !card.supertypes.is_empty() {
+        let supers: Vec<&str> = card.supertypes.iter().map(|s| match s {
+            crate::card::Supertype::Basic => "Basic",
+            crate::card::Supertype::Legendary => "Legendary",
+            crate::card::Supertype::Snow => "Snow",
+        }).collect();
+        type_line.push_str(&supers.join(" "));
+        type_line.push(' ');
+    }
+    type_line.push_str(&type_parts.join(" "));
+    if !card.subtypes.is_empty() {
+        type_line.push_str(" — ");
+        type_line.push_str(&card.subtypes.join(" "));
+    }
+
+    draw_rectangle(zx + 10.0, zy + 56.0, zw - 20.0, 28.0, Color::new(0.0, 0.0, 0.0, 0.15));
+    draw_text(&type_line, zx + 16.0, zy + 76.0, FONT_MD, tc);
+
+    // Oracle text box
+    draw_rectangle(zx + 10.0, zy + 94.0, zw - 20.0, 260.0, Color::new(0.95, 0.93, 0.88, 0.9));
+    let oracle_color = Color::new(0.1, 0.1, 0.1, 1.0);
+
+    let wrap_width = 38; // chars per line
+    let mut text_y = zy + 116.0;
+    for paragraph in card.oracle_text.split('\n') {
+        let words: Vec<&str> = paragraph.split_whitespace().collect();
+        let mut line = String::new();
+        for word in words {
+            if line.len() + word.len() + 1 > wrap_width {
+                draw_text(&line, zx + 18.0, text_y, FONT_SM + 1.0, oracle_color);
+                text_y += 17.0;
+                line = word.to_string();
+            } else {
+                if !line.is_empty() { line.push(' '); }
+                line.push_str(word);
+            }
+        }
+        if !line.is_empty() {
+            draw_text(&line, zx + 18.0, text_y, FONT_SM + 1.0, oracle_color);
+            text_y += 17.0;
+        }
+        text_y += 5.0;
+    }
+
+    // Keywords
+    if !card.keywords.is_empty() {
+        let kws: Vec<&str> = card.keywords.iter().map(|k| match k {
+            Keyword::Flying => "Flying",
+            Keyword::FirstStrike => "First strike",
+            Keyword::DoubleStrike => "Double strike",
+            Keyword::Deathtouch => "Deathtouch",
+            Keyword::Lifelink => "Lifelink",
+            Keyword::Trample => "Trample",
+            Keyword::Vigilance => "Vigilance",
+            Keyword::Reach => "Reach",
+            Keyword::Haste => "Haste",
+            Keyword::Hexproof => "Hexproof",
+            Keyword::Indestructible => "Indestructible",
+            Keyword::Menace => "Menace",
+            Keyword::Flash => "Flash",
+            Keyword::Defender => "Defender",
+        }).collect();
+        draw_text(&kws.join(", "), zx + 18.0, text_y, FONT_SM + 1.0, oracle_color);
+    }
+
+    // P/T box
+    if let (Some(p), Some(t)) = (card.power, card.toughness) {
+        let pt = format!("{}/{}", p, t);
+        let pt_w = pt.len() as f32 * 14.0 + 16.0;
+        draw_rectangle(zx + zw - pt_w - 10.0, zy + zh - 40.0, pt_w, 30.0, Color::new(0.0, 0.0, 0.0, 0.25));
+        draw_text(&pt, zx + zw - pt_w - 2.0, zy + zh - 16.0, FONT_LG + 4.0, tc);
     }
 }

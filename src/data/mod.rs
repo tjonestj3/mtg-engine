@@ -1,3 +1,6 @@
+pub mod decklists;
+pub mod scryfall;
+
 use crate::card::{BasicLandType, CardData, CardType, Keyword, Supertype};
 use crate::mana::ManaCost;
 
@@ -54,70 +57,13 @@ pub fn creature_with_keywords(
 
 pub fn sample_decklist() -> Vec<CardData> {
     let mut deck = Vec::new();
-
-    for _ in 0..8 {
-        deck.push(basic_land("Forest", BasicLandType::Forest));
-    }
-    for _ in 0..8 {
-        deck.push(basic_land("Mountain", BasicLandType::Mountain));
-    }
-
-    for _ in 0..4 {
-        deck.push(vanilla_creature(
-            "Grizzly Bears",
-            ManaCost { generic: 1, green: 1, ..ManaCost::new() },
-            2,
-            2,
-        ));
-    }
-
-    for _ in 0..4 {
-        deck.push(vanilla_creature(
-            "Hill Giant",
-            ManaCost { generic: 3, red: 1, ..ManaCost::new() },
-            3,
-            3,
-        ));
-    }
-
-    for _ in 0..4 {
-        deck.push(creature_with_keywords(
-            "Llanowar Elves",
-            ManaCost { green: 1, ..ManaCost::new() },
-            1,
-            1,
-            vec![],
-        ));
-    }
-
-    for _ in 0..4 {
-        deck.push(creature_with_keywords(
-            "Serra Angel",
-            ManaCost { generic: 3, white: 2, ..ManaCost::new() },
-            4,
-            4,
-            vec![Keyword::Flying, Keyword::Vigilance],
-        ));
-    }
-
-    for _ in 0..4 {
-        deck.push(vanilla_creature(
-            "Goblin Piker",
-            ManaCost { generic: 1, red: 1, ..ManaCost::new() },
-            2,
-            1,
-        ));
-    }
-
-    for _ in 0..4 {
-        deck.push(creature_with_keywords(
-            "Giant Spider",
-            ManaCost { generic: 3, green: 1, ..ManaCost::new() },
-            2,
-            4,
-            vec![Keyword::Reach],
-        ));
-    }
-
+    for _ in 0..8 { deck.push(basic_land("Forest", BasicLandType::Forest)); }
+    for _ in 0..8 { deck.push(basic_land("Mountain", BasicLandType::Mountain)); }
+    for _ in 0..4 { deck.push(vanilla_creature("Grizzly Bears", ManaCost { generic: 1, green: 1, ..ManaCost::new() }, 2, 2)); }
+    for _ in 0..4 { deck.push(vanilla_creature("Hill Giant", ManaCost { generic: 3, red: 1, ..ManaCost::new() }, 3, 3)); }
+    for _ in 0..4 { deck.push(creature_with_keywords("Llanowar Elves", ManaCost { green: 1, ..ManaCost::new() }, 1, 1, vec![])); }
+    for _ in 0..4 { deck.push(creature_with_keywords("Serra Angel", ManaCost { generic: 3, white: 2, ..ManaCost::new() }, 4, 4, vec![Keyword::Flying, Keyword::Vigilance])); }
+    for _ in 0..4 { deck.push(vanilla_creature("Goblin Piker", ManaCost { generic: 1, red: 1, ..ManaCost::new() }, 2, 1)); }
+    for _ in 0..4 { deck.push(creature_with_keywords("Giant Spider", ManaCost { generic: 3, green: 1, ..ManaCost::new() }, 2, 4, vec![Keyword::Reach])); }
     deck
 }
